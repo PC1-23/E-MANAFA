@@ -36,7 +36,7 @@ class HunterEManafa(EManafa):
         self.instrument_file = instrument_file
         self.not_instrument_file = not_instrument_file
 
-    def init(self):
+    def init(self, clean=False):
         """inits inner services.
         Calls init from super class and also from the log service.
         """

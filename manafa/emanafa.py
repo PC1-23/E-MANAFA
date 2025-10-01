@@ -4,7 +4,8 @@ import time
 from manafa.services.batteryStatsService import BatteryStatsService
 from manafa.services.service import *
 from manafa.services.perfettoService import PerfettoService
-from manafa.parsing.perfetto.perfettoParser import PerfettoCPUfreqParser
+from manafa.parsing.perfetto.perfettoParser import PerfettoCPUfreqParser, parse_dumpsys_output, \
+    generate_power_profile_xml
 from manafa.parsing.batteryStats.BatteryStatsParser import BatteryStatsParser
 from manafa.utils.Logger import log, LogSeverity
 from manafa.utils.Utils import execute_shell_command, mega_find, get_resources_dir, is_float
@@ -60,10 +61,10 @@ class EManafa(Service):
         pft_out_file: perfetto service output file
         bts_out_file: batterystats output file
     """
-    def __init__(self, power_profile=None, timezone=None, resources_dir=MANAFA_RESOURCES_DIR):
+    def __init__(self, power_profile=None, timezone=None, resources_dir=MANAFA_RESOURCES_DIR, dynamic_profile=True):
         super(EManafa, self).__init__()
         self.resources_dir = resources_dir
-        self.power_profile = power_profile if power_profile is not None else self.infer_power_profile()
+        self.power_profile = power_profile if power_profile is not None else self.infer_power_profile(dynamic_profile)
         self.boot_time = 0
         log("Power profile file: " + self.power_profile, LogSeverity.INFO)
         self.batterystats = BatteryStatsService()
@@ -83,7 +84,9 @@ class EManafa(Service):
         self.boot_time = get_last_boot_time()
         self.batterystats.init(boot_time=self.boot_time)
         self.perfetto.init(boot_time=self.boot_time)
+        self.validate_start()
         self.unplug_if_fully_charged()
+
 
     def start(self):
         """starts inner services."""
@@ -281,7 +284,16 @@ class EManafa(Service):
         Returns:
             filename: the name of the extracted xml file
         """
-        # extracting power_profile.xml from device
+        # first try tro extract power profile via batterystats service
+        res, out, v = execute_shell_command("adb shell dumpsys batterystats  --power-profile")
+        if res == 0 and not 'unknown option' in out.lower():
+            log("Dynamically inferring power profile via batterystats", LogSeverity.INFO)
+            parsed_profile_data = parse_dumpsys_output(out)
+            # 2. Generate the XML file from the parsed data
+            generate_power_profile_xml(parsed_profile_data, filename)
+            return filename
+
+        # extracting power_profile.xml from device via frawework-res.apk
         res, suc, v = execute_shell_command("adb pull /system/framework/framework-res.apk %s" % self.resources_dir)
         if res == 0:
             cmd = """java -jar {apktooldir} d {fmres} -f -o {outjardir}""".format(
@@ -309,7 +321,7 @@ class EManafa(Service):
 
         return DEFAULT_PROFILE
 
-    def infer_power_profile(self):
+    def infer_power_profile(self, dynamic_profile=True):
         """picks the most appropriate power profile file. power profile files present in self.resources_dir contains a
         device model id in the filename, which is determinated by ro.product.model property. if there is an adequate
         file locally, it retrieves such filename. Otherwise, it extracts the profile from the device
@@ -319,9 +331,13 @@ class EManafa(Service):
             filename: the name of the  xml file.
         """
         res, device_model, _ = execute_shell_command("adb shell getprop ro.product.model")
-        if res == 0 and device_model != "":
-            model_profile_file = """power_profile_{device_model}.xml""".format(
-                device_model=device_model.replace(" ", "").strip().lower())
+        model_profile_file = """power_profile_{device_model}.xml""".format(
+            device_model=device_model.replace(" ", "").strip().lower())
+        if dynamic_profile:
+            log("Extracting power profile from device")
+            power_profile = self.__extract_power_profile(model_profile_file)
+            return power_profile
+        if  res == 0 and device_model != "":
             matching_profiles = mega_find(self.resources_dir, pattern=model_profile_file, maxdepth=2)
             if len(matching_profiles) > 0:
                 return matching_profiles[0]
@@ -348,8 +364,7 @@ class EManafa(Service):
 
     def unplug_if_fully_charged(self):
         """ virtually unplugs device charger, by calling dumpsys battery unplug."""
-        # battery stats file comes empty when battery level == 100
-        # using adb to trick device to think it is not charging th battery
+        # battery stats output might be empty when battery level == 100
         res, o, e = execute_shell_command("adb shell dumpsys battery | grep level | grep 100")
         has_full_charge = res == 0 and "100" in o
         if has_full_charge:
@@ -384,3 +399,9 @@ class EManafa(Service):
         with open(output_filepath, 'w') as j:
             json.dump(self.gen_final_report(), j)
         return output_filepath
+
+    def validate_start(self):
+        # warn if device is being used via usb
+        res, out, err = execute_shell_command("adb devices -l | grep usb")
+        if res == 0 and len(out) > 0:
+            log("Device is being charged via USB. This might affect the profiling results.", LogSeverity.WARNING)

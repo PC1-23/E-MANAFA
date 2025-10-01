@@ -95,7 +95,7 @@ class PerfettoService(Service):
         # execute_shell_command(f"adb shell perfetto -o {self.output_filename} freq  -t 1h --background ")´
         cmd = f"cat {os.path.join(RESOURCES_DIR, self.cfg_file)} | adb shell perfetto " \
               f"{self.get_switch('background', '-b')} -o {self.output_filename} {self.get_switch('config', '-c')} -"
-        print(f"executing perfetto: {cmd}")
+        #print(f"executing perfetto: {cmd}")
         res, o, e = execute_shell_command(cmd=cmd)
         return res == 0 and e.strip() == ""
 

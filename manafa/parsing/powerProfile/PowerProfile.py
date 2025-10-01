@@ -55,8 +55,12 @@ class PowerProfile(object):
 			if child.tag == "item":
 				ll = child.attrib['name'].split(".")
 				begin_d = self.components
+				#print(child.attrib['name'])
 				for at in ll:
-					begin_d[at]={} if not at in begin_d else begin_d[at]
+					try:
+						begin_d[at]={} if not at in begin_d else begin_d[at]
+					except:
+						continue
 					last_b = begin_d
 					begin_d = begin_d[at]
 				last_b[at]=float(child.text)

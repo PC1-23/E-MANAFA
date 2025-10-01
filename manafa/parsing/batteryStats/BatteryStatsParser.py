@@ -430,7 +430,7 @@ class BatteryStatsParser(object):
         if comp_name == "screen" and "screen" in bt_event.updates:
             on_current = possible_states["on"]  if not isinstance(possible_states['on'], dict) else first([x for x in possible_states["on"].values() if isinstance(x, float)])
             brightness_level = bt_event.updates["brightness"] if "brightness" in bt_event.updates else 1
-            relative_full_current = (brightness_level * (possible_states["full"] if not isinstance(possible_states, dict) else first([x for x in possible_states["full"].values() if isinstance(x, float)])  ) / (
+            relative_full_current = (brightness_level * (possible_states["full"] if not isinstance(possible_states["full"], dict) else first([x for x in possible_states["full"].values() if isinstance(x, float)])  ) / (
                         len(self.definitions["nominal"]["brightness"]) - 1))
             current += on_current + relative_full_current
 
