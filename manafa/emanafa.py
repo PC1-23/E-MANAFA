@@ -285,9 +285,10 @@ class EManafa(Service):
         res, suc, v = execute_shell_command("adb pull /system/framework/framework-res.apk %s" % self.resources_dir)
         if res == 0:
             cmd = """java -jar {apktooldir} d {fmres} -f -o {outjardir}""".format(
-                res_dir=self.resources_dir, apktooldir=os.path.join(self.resources_dir, "apktool-2.6.2-7e71ad-SNAPSHOT-small.jar"),
+                res_dir=self.resources_dir, apktooldir=os.path.join(self.resources_dir, "apktool_2.12.1.jar"),
                 fmres=os.path.join(self.resources_dir, "framework-res.apk"), outjardir=os.path.join(self.resources_dir,
                                                                                                     "out_jar_dir"))
+            print(cmd)
             res, suc, v = execute_shell_command(cmd)
             pp_file = os.path.join(self.resources_dir, "out_jar_dir", "res", "xml", "power_profile.xml")
             if res == 0 and os.path.exists(pp_file):
@@ -326,6 +327,7 @@ class EManafa(Service):
                 return matching_profiles[0]
             else:
                 # if power profile not present in profiles directory, extract from device
+                log("Extracting power profile from device")
                 power_profile = self.__extract_power_profile(model_profile_file)
                 return power_profile
         else:
@@ -381,3 +383,4 @@ class EManafa(Service):
             output_filepath = "manafa_resume_%s.json" % (run_id if run_id is not None else 0)
         with open(output_filepath, 'w') as j:
             json.dump(self.gen_final_report(), j)
+        return output_filepath

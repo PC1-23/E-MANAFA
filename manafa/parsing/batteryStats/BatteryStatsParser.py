@@ -5,6 +5,9 @@ BatteryStatsConstants contains constants associated with batterystats events and
 
 import os
 import re, json
+
+from more_itertools.more import first
+
 # sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 
 from manafa.parsing.powerProfile.PowerProfile import PowerProfile
@@ -425,9 +428,9 @@ class BatteryStatsParser(object):
         avg_ct = 0
         # screen
         if comp_name == "screen" and "screen" in bt_event.updates:
-            on_current = possible_states["on"]
+            on_current = possible_states["on"]  if not isinstance(possible_states['on'], dict) else first([x for x in possible_states["on"].values() if isinstance(x, float)])
             brightness_level = bt_event.updates["brightness"] if "brightness" in bt_event.updates else 1
-            relative_full_current = (brightness_level * possible_states["full"] / (
+            relative_full_current = (brightness_level * (possible_states["full"] if not isinstance(possible_states, dict) else first([x for x in possible_states["full"].values() if isinstance(x, float)])  ) / (
                         len(self.definitions["nominal"]["brightness"]) - 1))
             current += on_current + relative_full_current
 

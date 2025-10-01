@@ -7,6 +7,7 @@ import datetime
 
 DUMP_TO_FILE = False
 
+PRINTED_ONCE_STRS = set()
 
 class LogSeverity(Enum):
     SUCCESS = "Success"
@@ -26,7 +27,11 @@ def getColor(sev):
     }.get(sev, 'green')
 
 
-def log(message, log_sev=LogSeverity.INFO, log_time=None):
+def log(message, log_sev=LogSeverity.INFO, log_time=None, just_once=False):
+    if just_once:
+        if message in PRINTED_ONCE_STRS:
+            return
+        PRINTED_ONCE_STRS.add(message)
     the_time = time.time() if log_time is None else log_time
     color = getColor(log_sev.value)
     adapted_time = datetime.datetime.fromtimestamp(the_time)

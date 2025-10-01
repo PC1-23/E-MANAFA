@@ -36,6 +36,7 @@
 			"off": "off"
 		},
 		"gps_signal_quality":{
+			"none": "none",
 			"poor": "poor",
 			"good": "good"
 		},

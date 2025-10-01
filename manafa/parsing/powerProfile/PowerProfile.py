@@ -64,7 +64,10 @@ class PowerProfile(object):
 				ll = child.attrib['name'].split(".")
 				begin_d = self.components
 				for at in ll:
-					begin_d[at]={} if at not in begin_d else begin_d[at]
+					try:
+						begin_d[at]={} if at not in begin_d else begin_d[at]
+					except:
+						continue
 					last_b = begin_d
 					begin_d = begin_d[at]
 				last_b[at] = list( map( lambda xxz : float(xxz.text),  list(child)))
@@ -116,7 +119,7 @@ class PowerProfile(object):
 			if len(cluster_cores) == 1 and len(cluster_cores) <= core_id:
 				log("The current power profile is probably incomplete. "
 					"The reported values for CPU energy might not be accurate",
-					log_sev=LogSeverity.ERROR)
+					log_sev=LogSeverity.WARNING, just_once=True)
 				profile_speeds = self.components["cpu"]["core_speeds"]["cluster0"] if 'core_speeds' in \
 																						   self.components["cpu"] else \
 				self.components["cpu"]["speeds"]["cluster0"]
