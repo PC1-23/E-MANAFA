@@ -24,6 +24,15 @@ def convertBatStatTimeToTimeStamp(batstattime,timezone="EST"):
 	#return time.mktime(d.timetuple())
 
 
+def convertBatStatTimeToTimeStampNew(batstattime, year, timezone="EST"):
+	# parse data like  11-11 14:49:47.952
+	batstattime = str(year) + "-" + batstattime
+	d1 = datetime.datetime.strptime(batstattime, '%Y-%m-%d %H:%M:%S.%f')
+	pst = pytz.timezone(timezone)
+	d = pst.localize(d1)
+	return time.mktime(d.timetuple())
+
+
 def batStatResetTimeToTimeStamp(matime, timezone="UTC", default_tz="UTC"):
 	cv_timezone = convert_to_pytz_timezone(timezone, default_tz)
 	d1 = datetime.datetime.strptime(matime, '%Y-%m-%d-%H-%M-%S')

@@ -5,6 +5,7 @@ BatteryStatsConstants contains constants associated with batterystats events and
 
 import os
 import re, json
+from datetime import datetime
 
 from more_itertools.more import first
 
@@ -12,7 +13,8 @@ from more_itertools.more import first
 
 from manafa.parsing.powerProfile.PowerProfile import PowerProfile
 from manafa.utils.Utils import get_resources_dir
-from manafa.utils.dateUtils import convertBatStatTimeToTimeStamp, batStatResetTimeToTimeStamp
+from manafa.utils.dateUtils import convertBatStatTimeToTimeStamp, batStatResetTimeToTimeStamp, \
+    convertBatStatTimeToTimeStampNew
 import copy
 from manafa.utils.Logger import log, LogSeverity
 
@@ -259,16 +261,26 @@ class BatteryStatsParser(object):
                 # print(time)
                 events = self.parse_states(x.groups()[3])
                 self.add_update(time, events)
-            elif re.match(r"^\s*0 (\(\d+\)) (.*)?$", line):
-                x = re.match(r"^\s*0 (\(\d+\)) (.*)?$", line)
-                if "RESET:TIME" in x.groups()[1]:
-                    self.start_time = batStatResetTimeToTimeStamp((x.groups()[1]).replace("RESET:TIME: ", ""),
-                                                                  self.timezone)
+            elif re.match(r"^\s*(\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s(.*)?$", line):
+                # after android 16, the dateformat changed and its not cumulative anymore
+                x = re.match(r"^\s*(\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s(.*)?$", line)
+                # get year from self.start_time
+                year = datetime.fromtimestamp(self.start_time).year
+                time = convertBatStatTimeToTimeStampNew(x.groups()[0], year, timezone=self.timezone)
+                # print(time)
+                events = self.parse_states(x.groups()[2])
+                self.add_update(time, events)
+            elif "RESET:TIME" in line:
+                self.start_time = batStatResetTimeToTimeStamp(line.split("RESET:TIME: ")[-1], self.timezone)
                 # print(epochToDate(self.start_time))
             else:
                 # TODO Handle DcpuStats and DpstStats
                 # print(line)
-                log("Unrecognized patter in line of batstats file", LogSeverity.WARNING)
+                if re.match(r"^\s*(\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{3})\s+", line):
+                    continue
+                elif re.match(r"^\s*([^\s]+) (\(\d+\)) TIME:", line):
+                    continue
+                log("Unrecognized pattern in line of batstats file" + line, LogSeverity.WARNING)
 
     def add_update(self, time, bat_events):
         """Adds new event updates to current state.
