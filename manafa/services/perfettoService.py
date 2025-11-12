@@ -93,6 +93,7 @@ class PerfettoService(Service):
         Starts perfetto service, using the config file cfg_file as input.
         """
         # execute_shell_command(f"adb shell perfetto -o {self.output_filename} freq  -t 1h --background ")´
+        execute_shell_command("adb shell setprop persist.traced.enable 1")
         cmd = f"cat {os.path.join(RESOURCES_DIR, self.cfg_file)} | adb shell perfetto " \
               f"{self.get_switch('background', '-b')} -o {self.output_filename} {self.get_switch('config', '-c')} -"
         #print(f"executing perfetto: {cmd}")
@@ -113,14 +114,15 @@ class PerfettoService(Service):
             file_id = execute_shell_command("date +%s")[1].strip()
         res, o, e = execute_shell_command("adb shell killall perfetto")
         if res != 0:
-            print(o)
-            print(e)
-            is_running, _, _ = execute_shell_command("adb shell ps | grep perfetto")
+            x = execute_shell_command("adb shell setprop persist.traced.enable 0")
+            print(x)
+            time.sleep(2)
+            x = execute_shell_command("adb shell ps | grep perfetto")
+            is_running = x[0] == 0 and 'perfetto' in x[1]
             if is_running:
                 raise Exception("unable to kill Perfetto service")
-            else:
-                raise Exception("Unable to stop Perfetto because Perfetto service was not running")
         time.sleep(1)
+        execute_shell_command("adb shell setprop persist.traced.enable 1")
         filename = os.path.join(self.results_dir, f'trace-{file_id}-{self.boot_time}')
         res, o, e = execute_shell_command(f"adb pull {self.output_filename} {filename}")
         if res != 0:
