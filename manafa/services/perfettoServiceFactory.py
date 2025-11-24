@@ -6,6 +6,7 @@ from ..utils.Logger import log, LogSeverity
 
 
 def create_perfetto_service(boot_time=0, output_res_folder="perfetto", 
+                            enable_energy=True, enable_memory=False,
                             force_enhanced=False, force_legacy=False):
     """Factory function to create appropriate Perfetto service.
     
@@ -16,6 +17,8 @@ def create_perfetto_service(boot_time=0, output_res_folder="perfetto",
     Args:
         boot_time (float): Timestamp of device's last boot
         output_res_folder (str): Folder where logs will be stored
+        enable_energy (bool): Enable energy profiling (power rails)
+        enable_memory (bool): Enable memory profiling (system memory)
         force_enhanced (bool): Force use of enhanced service (for testing)
         force_legacy (bool): Force use of legacy service (for compatibility)
     
@@ -24,9 +27,15 @@ def create_perfetto_service(boot_time=0, output_res_folder="perfetto",
     
     Raises:
         Exception: If Perfetto is not available on device
+        ValueError: If both energy and memory profiling are enabled simultaneously
     """
     if not device_has_perfetto():
         raise Exception("Perfetto is not available on this device")
+    
+    # Validate: cannot enable both energy and memory simultaneously
+    # if enable_energy and enable_memory:
+    #     raise ValueError("Cannot enable both energy and memory profiling simultaneously. "
+    #                     "Run them separately to avoid overhead skewing results.")
     
     # Handle forced modes
     if force_legacy:
@@ -34,13 +43,46 @@ def create_perfetto_service(boot_time=0, output_res_folder="perfetto",
         return PerfettoService(boot_time=boot_time, output_res_folder=output_res_folder)
     
     if force_enhanced:
-        log("Forcing enhanced PerfettoServiceEnhanced", log_sev=LogSeverity.INFO)
-        return PerfettoServiceEnhanced(boot_time=boot_time, output_res_folder=output_res_folder)
+        log(f"Forcing enhanced PerfettoServiceEnhanced (energy={enable_energy}, memory={enable_memory})", 
+            log_sev=LogSeverity.INFO)
+        return PerfettoServiceEnhanced(
+            boot_time=boot_time, 
+            output_res_folder=output_res_folder,
+            enable_energy=enable_energy,
+            enable_memory=enable_memory
+        )
     
     # Auto-detect device capabilities
-    if device_supports_power_rails():
-        log("Using PerfettoServiceEnhanced (power rails supported)", log_sev=LogSeverity.INFO)
-        return PerfettoServiceEnhanced(boot_time=boot_time, output_res_folder=output_res_folder)
+    # If BOTH energy and memory are requested
+    if enable_energy and enable_memory and device_supports_power_rails():
+        log("Using PerfettoServiceEnhanced for combined energy and memory profiling", 
+            log_sev=LogSeverity.INFO)
+        return PerfettoServiceEnhanced(
+            boot_time=boot_time, 
+            output_res_folder=output_res_folder,
+            enable_energy=True,
+            enable_memory=True
+        )
+    # If energy is requested, check for power rails support
+    elif enable_energy and device_supports_power_rails():
+        log("Using PerfettoServiceEnhanced for energy profiling (power rails supported)", 
+            log_sev=LogSeverity.INFO)
+        return PerfettoServiceEnhanced(
+            boot_time=boot_time, 
+            output_res_folder=output_res_folder,
+            enable_energy=True,
+            enable_memory=False
+        )
+    # If memory is requested, use enhanced service
+    elif enable_memory:
+        log("Using PerfettoServiceEnhanced for memory profiling", log_sev=LogSeverity.INFO)
+        return PerfettoServiceEnhanced(
+            boot_time=boot_time, 
+            output_res_folder=output_res_folder,
+            enable_energy=False,
+            enable_memory=True
+        )
+    # Default: legacy service if power rails not supported
     else:
         log("Using legacy PerfettoService (power rails not supported)", log_sev=LogSeverity.INFO)
         return PerfettoService(boot_time=boot_time, output_res_folder=output_res_folder)

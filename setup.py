@@ -17,15 +17,14 @@ setup(
     packages=setuptools.find_packages(exclude=['manafa.tests', 'manafa.tests.*']),
     use_incremental=True,
     install_requires=[
-        'pytz==2021.1',
-        'termcolor==1.1.0',
-        'python-textops3==3.1.0',
-        'python-dateutil==2.8.1',
-        "setuptools>=42",
-        "wheel",
-        #"incremental"
-
-    ],
+    'pytz==2021.1',
+    'termcolor==1.1.0',
+    'python-textops3>=3.2.1',  # Updated to allow 3.2.1+
+    'python-dateutil==2.8.1',
+    'perfetto',
+    "setuptools>=42",
+    "wheel",
+],
     setup_requires=['incremental'],
     include_package_data=True,
     scripts=['bin/emanafa'],

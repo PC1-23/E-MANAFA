@@ -3,7 +3,7 @@ import sys
 import time
 from manafa.services.batteryStatsService import BatteryStatsService
 from manafa.services.service import *
-from manafa.services.perfettoService import PerfettoService
+from manafa.services import create_perfetto_service
 from manafa.parsing.perfetto.perfettoParser import PerfettoCPUfreqParser, parse_dumpsys_output, \
     generate_power_profile_xml
 from manafa.parsing.batteryStats.BatteryStatsParser import BatteryStatsParser
@@ -68,13 +68,41 @@ class EManafa(Service):
         self.boot_time = 0
         log("Power profile file: " + self.power_profile, LogSeverity.INFO)
         self.batterystats = BatteryStatsService()
-        self.perfetto = PerfettoService()
+
+        # Initialize profiler_mode before creating service
+        self.profiler_mode = None
+
+        # Don't create perfetto service yet - wait for init() so profiler_mode can be set first
+        self.perfetto = None
+
         self.timezone = timezone if timezone is not None else self.__infer_timezone()
         self.perf_events = PerfettoCPUfreqParser(self.power_profile, self.boot_time, timezone=self.timezone)
         self.unplugged = False
         self.bat_events = None
         self.pft_out_file = None
         self.bts_out_file = None
+    # def _create_perfetto_service(self):
+    #     """Create the appropriate perfetto service based on profiler_mode."""
+    #     if self.profiler_mode == 'energy':
+    #         self.perfetto = create_perfetto_service(
+    #             boot_time=self.boot_time, 
+    #             output_res_folder="perfetto",
+    #             enable_energy=True,
+    #             enable_memory=False
+    #         )
+    #     elif self.profiler_mode == 'memory':
+    #         self.perfetto = create_perfetto_service(
+    #             boot_time=self.boot_time,
+    #             output_res_folder="perfetto", 
+    #             enable_energy=False,
+    #             enable_memory=True
+    #         )
+    #     else:
+    #         # Default: create with both enabled or use legacy
+    #         self.perfetto = create_perfetto_service(
+    #             boot_time=self.boot_time,
+    #             output_res_folder="perfetto"
+    #         )
 
     def config(self, **kwargs):
         pass
@@ -83,6 +111,42 @@ class EManafa(Service):
         """inits inner services and virtually unplugs device if it is fully charged"""
         self.boot_time = get_last_boot_time()
         self.batterystats.init(boot_time=self.boot_time)
+
+        # Create perfetto service based on profiler_mode
+        if self.profiler_mode == 'legacy':
+            self.perfetto = create_perfetto_service(
+                boot_time=self.boot_time,
+                output_res_folder="perfetto",
+                force_legacy=True
+            )
+        elif self.profiler_mode == 'energy':
+            self.perfetto = create_perfetto_service(
+                boot_time=self.boot_time,
+                output_res_folder="perfetto",
+                enable_energy=True,
+                enable_memory=False
+            )
+        elif self.profiler_mode == 'memory':
+            self.perfetto = create_perfetto_service(
+                boot_time=self.boot_time,
+                output_res_folder="perfetto",
+                enable_energy=False,
+                enable_memory=True
+            )
+        elif self.profiler_mode == 'both':
+            self.perfetto = create_perfetto_service(
+                boot_time=self.boot_time,
+                output_res_folder="perfetto",
+                enable_energy=True,
+                enable_memory=True
+            )
+        else:
+            # Default: auto-detect (will use enhanced if supported, otherwise legacy)
+            self.perfetto = create_perfetto_service(
+                boot_time=self.boot_time,
+                output_res_folder="perfetto"
+            )
+
         self.perfetto.init(boot_time=self.boot_time)
         self.validate_start()
         self.unplug_if_fully_charged()
@@ -92,10 +156,13 @@ class EManafa(Service):
 
     def start(self):
         """starts inner services."""
+        # Create perfetto service if not already created
+        if self.perfetto is None:
+            self._create_perfetto_service()
+        
         self.batterystats.start()
         self.perfetto.start()
         self.perf_events.start()
-
 
     def stop(self, run_id=None):
         """stops inner services.
@@ -130,13 +197,31 @@ class EManafa(Service):
         if pf_file is None:
             pf_file = self.pft_out_file
         if bts_file is None or pf_file is None:
-            log("Empty result files",
-                log_sev=LogSeverity.FATAL)
+            log("Empty result files", log_sev=LogSeverity.FATAL)
+        
+        # Check if we used the enhanced profiler
+        from .services.perfettoServiceEnhanced import PerfettoServiceEnhanced
+        if isinstance(self.perfetto, PerfettoServiceEnhanced):
+            log("Using power rails energy calculation", log_sev=LogSeverity.INFO)
+            # Use new power rails-based energy calculation
+            from .parsing.perfettoEnergyCalculator import calculate_energy_from_power_rails, calculate_memory_stats
+            self.power_rails_energy = calculate_energy_from_power_rails(pf_file)
+            
+            # Get app package - handle both EManafa and AMEManafa
+            app_package = getattr(self, 'app', None) or getattr(self, 'app_package_name', None)
+            self.memory_stats = calculate_memory_stats(pf_file, app_package=app_package)
+        else:
+            log("Using legacy batterystats energy calculation", log_sev=LogSeverity.INFO)
+        
+        # Continue with existing parsing for other metrics
         self.boot_time = get_last_boot_time(bts_file)
         self.bat_events = BatteryStatsParser(self.power_profile, timezone=self.timezone)
         self.bat_events.parse_file(bts_file)
-        self.perf_events.start_time = self.boot_time
-        self.perf_events.parse_file(pf_file)
+
+        # Only parse perfetto file with old parser if using legacy profiler
+        if not isinstance(self.perfetto, PerfettoServiceEnhanced):
+            self.perf_events.start_time = self.boot_time
+            self.perf_events.parse_file(pf_file)
 
     def get_consumption_in_between(self, start_time=0, end_time=sys.maxsize):
         """retrieves energy consumption and device events between a timestamp interval.
@@ -151,10 +236,23 @@ class EManafa(Service):
             presents.
         """
 
-        total, per_component = self.calculate_non_cpu_energy(start_time, end_time)
+        # Try to calculate non-CPU energy from BatteryStats
+        # If BatteryStats has no samples (device plugged in), only calculate CPU energy
+        try:
+            total, per_component = self.calculate_non_cpu_energy(start_time, end_time)
+        except Exception as e:
+            log(f"BatteryStats has no samples (device may be plugged in): {e}", log_sev=LogSeverity.WARNING)
+            log("Calculating CPU energy only from Perfetto CPU frequency events", log_sev=LogSeverity.INFO)
+            total = 0
+            per_component = {}
+
         total_cpu = self.calculate_cpu_energy(start_time, end_time)
-        metrics = self.bat_events.get_events_in_between(start_time, end_time)
+        metrics = self.bat_events.get_events_in_between(start_time, end_time) if self.bat_events and len(self.bat_events.events) > 0 else {}
+
+        if 'cpu' not in per_component:
+            per_component['cpu'] = 0
         per_component['cpu'] += total_cpu
+
         return total + total_cpu, per_component, metrics
 
     def calculate_glob_and_component_consumption(self, last_event, per_component_consumption, delta_time, total):
@@ -234,6 +332,18 @@ class EManafa(Service):
         if len(self.perf_events.events) == 0:
             raise Exception("Unable no find perfetto cpu frequency events. Maybe the profiling session or warm-up time wasn't long enough")
             #log("Unable no find perfetto cpu frequency events. Maybe the profiling session or warm-up time wasn't long enough")
+
+        # Default voltage to use when BatteryStats is unavailable (device plugged in)
+        # 3.7V is typical for Li-ion batteries
+        DEFAULT_VOLTAGE_MV = 3700.0
+
+        # Check if BatteryStats data is available
+        has_batterystats = self.bat_events is not None and len(self.bat_events.events) > 0
+
+        if not has_batterystats:
+            log(f"BatteryStats unavailable (device plugged in). Using default voltage {DEFAULT_VOLTAGE_MV/1000}V for CPU energy calculation.",
+                log_sev=LogSeverity.INFO)
+
         c_beg_bef, c_beg_aft = self.perf_events.get_closest_pair(start_time)
         total = 0
         last_event = self.perf_events.events[c_beg_bef]
@@ -245,35 +355,65 @@ class EManafa(Service):
             # start-end             |--|
             # or in bt2 2 samples
             delta_time = abs(end_time - start_time)
+
+            if has_batterystats:
+                l = self.bat_events.get_CPU_samples_in_between(last_time, end_time)
+                for sample in l:
+                    delta, state, voltage = sample[0], sample[1], sample[2]
+                    cpus_current = last_event.calculate_CPUs_current(state, self.perf_events.power_profile)
+                    tot_time += delta
+                    total += (cpus_current) * delta * voltage
+            else:
+                # Calculate using CPU frequency events and default voltage
+                # Infer CPU state from frequencies: if all cores at 0, use idle, otherwise active
+                max_freq = max(last_event.vals) if last_event.vals else 0
+                state = "idle" if max_freq == 0 else "active"
+                cpus_current = last_event.calculate_CPUs_current(state, self.perf_events.power_profile)
+                total += cpus_current * delta_time * DEFAULT_VOLTAGE_MV
+            return total
+
+        for i, x in enumerate(self.perf_events.events[c_beg_aft:]):
+            if x.time > end_time:
+                break
+
+            if has_batterystats:
+                l = self.bat_events.get_CPU_samples_in_between(last_time, x.time)
+                # TODO : test to assert if x.time - last_time  = sum( deltas_of_L )
+                for sample in l:
+                    delta, state, voltage = sample[0], sample[1], sample[2]
+                    cpus_current = last_event.calculate_CPUs_current(state, self.perf_events.power_profile)
+                    tot_time += delta
+                    total += (cpus_current) * delta * voltage
+            else:
+                # Calculate using CPU frequency events and default voltage
+                delta = x.time - last_time
+                # Infer CPU state from frequencies: if all cores at 0, use idle, otherwise active
+                max_freq = max(last_event.vals) if last_event.vals else 0
+                state = "idle" if max_freq == 0 else "active"
+                cpus_current = last_event.calculate_CPUs_current(state, self.perf_events.power_profile)
+                total += cpus_current * delta * DEFAULT_VOLTAGE_MV
+
+            last_event = x
+            last_time = x.time
+
+        # after calcs'''
+        # TODO merge with cycle just like with non cpu
+        if has_batterystats:
             l = self.bat_events.get_CPU_samples_in_between(last_time, end_time)
             for sample in l:
                 delta, state, voltage = sample[0], sample[1], sample[2]
                 cpus_current = last_event.calculate_CPUs_current(state, self.perf_events.power_profile)
                 tot_time += delta
                 total += (cpus_current) * delta * voltage
-            return total
-
-        for i, x in enumerate(self.perf_events.events[c_beg_aft:]):
-            if x.time > end_time:
-                break
-            l = self.bat_events.get_CPU_samples_in_between(last_time, x.time)
-            # TODO : test to assert if x.time - last_time  = sum( deltas_of_L )
-            for sample in l:
-                delta, state, voltage = sample[0], sample[1], sample[2]
-                cpus_current = last_event.calculate_CPUs_current(state, self.perf_events.power_profile)
-                tot_time += delta
-                total += (cpus_current) * delta * voltage
-            last_event = x
-            last_time = x.time
-
-        # after calcs'''
-        # TODO merge with cycle just like with non cpu
-        l = self.bat_events.get_CPU_samples_in_between(last_time, end_time)
-        for sample in l:
-            delta, state, voltage = sample[0], sample[1], sample[2]
+        else:
+            # Calculate using CPU frequency events and default voltage
+            delta = end_time - last_time
+            # Infer CPU state from frequencies: if all cores at 0, use idle, otherwise active
+            max_freq = max(last_event.vals) if last_event.vals else 0
+            state = "idle" if max_freq == 0 else "active"
             cpus_current = last_event.calculate_CPUs_current(state, self.perf_events.power_profile)
-            tot_time += delta
-            total += (cpus_current) * delta * voltage
+            total += cpus_current * delta * DEFAULT_VOLTAGE_MV
+
         # TODO just like non cpu
         # print(tot_time)
         return total
