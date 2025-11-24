@@ -1,0 +1,185 @@
+"""
+Battery Drain Calculator for E-MANAFA
+Calculates the percentage of battery drained based on energy consumption.
+"""
+
+import re
+from manafa.utils.Utils import execute_shell_command
+from manafa.utils.Logger import log, LogSeverity
+
+
+class BatteryDrainCalculator:
+    """Calculates battery drain percentage from energy consumption in Joules."""
+
+    def __init__(self):
+        self.properties = None
+
+    def get_battery_properties(self):
+        """
+        Fetches and parses battery properties from the device using ADB.
+
+        Returns:
+            A dictionary containing battery properties or None if parsing fails.
+        """
+        log("Querying device for battery properties...", LogSeverity.INFO)
+
+        res, output, err = execute_shell_command("adb shell dumpsys battery")
+        if res != 0:
+            log(f"Failed to get battery properties: {err}", LogSeverity.WARNING)
+            return None
+
+        properties = {}
+
+        # Regex patterns to find the required values
+        patterns = {
+            'capacity_mah': r'harge counter: (\d+)',  # Design capacity in microampere-hours (µAh)
+            'voltage_mv': r'voltage: (\d+)',
+            'temperature_c': r'temperature: (\d+)',
+            'health_code': r'health: (\d+)',  # e.g. 2 for Good
+            'level': r'level: (\d+)',  # Current battery percentage
+        }
+
+        # Some devices report capacity differently
+        alt_capacity_pattern = r'battery capacity: (\d+)'
+
+        for key, pattern in patterns.items():
+            match = re.findall(pattern, output)
+            if match:
+                properties[key] = int(match[-1])
+
+        # Handle capacity specifically
+        if 'capacity_mah' in properties:
+            # The 'charge counter' is typically in microampere-hours (µAh), convert to mAh
+            properties['capacity_mah'] = properties['capacity_mah'] / 1000
+        else:
+            # Try the alternative pattern if the primary one fails
+            match = re.search(alt_capacity_pattern, output)
+            if match:
+                properties['capacity_mah'] = int(match.group(1))
+
+        # Check if all necessary properties were found
+        required_keys = ['voltage_mv', 'capacity_mah', 'health_code']
+        if not all(key in properties for key in required_keys):
+            log("Could not parse all required battery properties from device", LogSeverity.WARNING)
+            log("Battery drain percentage will not be available", LogSeverity.INFO)
+            return None
+
+        # Convert health code to a percentage multiplier
+        # Based on Android source constants: 2 corresponds to 'GOOD_HEALTH'
+        if properties['health_code'] == 2:  # HEALTH_GOOD
+            properties['health_multiplier'] = 1.0  # 100%
+        elif properties['health_code'] == 3:  # HEALTH_OVERHEAT
+            properties['health_multiplier'] = 0.8  # Assume degraded
+        elif properties['health_code'] == 4:  # HEALTH_DEAD
+            properties['health_multiplier'] = 0.5  # Assume very degraded
+        else:  # Others like UNKNOWN, COLD, etc.
+            properties['health_multiplier'] = 0.9  # Default assumption
+
+        # Convert temperature to proper Celsius
+        if 'temperature_c' in properties:
+            properties['temperature_c'] /= 10.0
+
+        self.properties = properties
+        return properties
+
+    def calculate_battery_drain(self, energy_joules):
+        """
+        Calculates battery drain percentage for a given energy consumption.
+
+        Args:
+            energy_joules: Energy consumed in Joules
+
+        Returns:
+            Dictionary containing battery drain information, or None if calculation fails
+        """
+        if self.properties is None:
+            self.properties = self.get_battery_properties()
+
+        if self.properties is None:
+            return None
+
+        # --- 1. Get Device Battery Capacity (adjusted for health) ---
+        design_capacity_mah = self.properties['capacity_mah']
+        health_multiplier = self.properties['health_multiplier']
+        current_voltage_v = self.properties['voltage_mv'] / 1000.0
+
+        # Effective capacity is the design capacity reduced by the health factor
+        effective_capacity_mah = design_capacity_mah * health_multiplier
+
+        # --- 2. Calculate Total Battery Energy in Watt-hours (Wh) ---
+        # Formula: Wh = (mAh * V) / 1000
+        total_battery_energy_wh = (effective_capacity_mah * current_voltage_v) / 1000.0
+
+        # --- 3. Convert Function's Energy Consumption to Watt-hours (Wh) ---
+        # 1 Wh = 3600 Joules
+        function_energy_wh = energy_joules / 3600.0
+
+        # --- 4. Calculate the Percentage of Battery Consumed ---
+        if total_battery_energy_wh == 0:
+            log("Calculated total battery energy is zero, cannot calculate drain percentage", LogSeverity.WARNING)
+            return None
+
+        percentage_drained = (function_energy_wh / total_battery_energy_wh) * 100
+
+        # --- 5. Build result dictionary ---
+        result = {
+            'design_capacity_mah': design_capacity_mah,
+            'current_voltage_v': current_voltage_v,
+            'health_multiplier': health_multiplier,
+            'effective_capacity_mah': effective_capacity_mah,
+            'total_battery_energy_wh': total_battery_energy_wh,
+            'consumed_energy_joules': energy_joules,
+            'consumed_energy_wh': function_energy_wh,
+            'battery_drain_percentage': percentage_drained
+        }
+
+        # Add temperature if available
+        if 'temperature_c' in self.properties:
+            result['temperature_c'] = self.properties['temperature_c']
+
+        # Add battery level if available
+        if 'level' in self.properties:
+            result['battery_level_percent'] = self.properties['level']
+
+        return result
+
+    def format_battery_drain_report(self, drain_info):
+        """
+        Formats battery drain information as a human-readable string.
+
+        Args:
+            drain_info: Dictionary returned by calculate_battery_drain()
+
+        Returns:
+            Formatted string report
+        """
+        if drain_info is None:
+            return "\n⚠️  Battery drain percentage unavailable (could not read battery properties)\n"
+
+        report = "\n" + "="*70 + "\n"
+        report += "BATTERY DRAIN ANALYSIS\n"
+        report += "="*70 + "\n"
+
+        report += f"\nDevice Battery Properties:\n"
+        report += f"  Design Capacity: {drain_info['design_capacity_mah']:.2f} mAh\n"
+        report += f"  Current Voltage: {drain_info['current_voltage_v']:.3f} V\n"
+
+        if 'temperature_c' in drain_info:
+            report += f"  Temperature:     {drain_info['temperature_c']:.1f} °C\n"
+
+        if 'battery_level_percent' in drain_info:
+            report += f"  Battery Level:   {drain_info['battery_level_percent']}%\n"
+
+        report += f"  Est. Health:     {drain_info['health_multiplier']:.2f} ({drain_info['health_multiplier'] * 100:.0f}%)\n"
+        report += f"  Effective Capacity: {drain_info['effective_capacity_mah']:.2f} mAh\n"
+        report += f"  Total Battery Energy: {drain_info['total_battery_energy_wh']:.3f} Wh\n"
+
+        report += f"\nEnergy Consumption:\n"
+        report += f"  Consumed: {drain_info['consumed_energy_joules']:.2f} J ({drain_info['consumed_energy_wh']:.6f} Wh)\n"
+
+        report += f"\nBattery Drain:\n"
+        report += f"  Estimated Drain: {drain_info['battery_drain_percentage']:.6f}%\n"
+
+        report += "="*70 + "\n"
+
+        return report

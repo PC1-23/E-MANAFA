@@ -8,6 +8,7 @@ from manafa.utils.Utils import execute_shell_command, mega_find, get_resources_d
 from manafa.emanafa import EManafa
 from manafa.hunter_emanafa import HunterEManafa
 from manafa.utils.Logger import log, LogSeverity
+from manafa.utils.BatteryDrainCalculator import BatteryDrainCalculator
 
 MANAFA_RESOURCES_DIR = get_resources_dir()
 MAX_SIZE = sys.maxsize
@@ -39,7 +40,7 @@ def export_to_csv(data, filepath):
     import csv
     with open(filepath, 'w', newline='') as f:
         writer = csv.writer(f)
-        
+
         if 'energy' in data:
             writer.writerow(['ENERGY PROFILING RESULTS'])
             writer.writerow(['Power Rail', 'Energy (Joules)'])
@@ -49,7 +50,7 @@ def export_to_csv(data, filepath):
             for rail, energy in sorted(data['energy']['by_rail'].items(), key=lambda x: x[1], reverse=True):
                 writer.writerow([rail, f"{energy:.2f}"])
             writer.writerow([])
-        
+
         if 'memory' in data:
             writer.writerow(['MEMORY PROFILING RESULTS'])
             writer.writerow(['Counter', 'Min (MB)', 'Avg (MB)', 'Max (MB)', 'Samples'])
@@ -63,23 +64,42 @@ def export_to_csv(data, filepath):
                         f"{stats['max_mb']:.2f}",
                         stats['samples']
                     ])
-    
+            writer.writerow([])
+
+        if 'battery_drain' in data:
+            writer.writerow(['BATTERY DRAIN ANALYSIS'])
+            drain = data['battery_drain']
+            writer.writerow(['Metric', 'Value'])
+            writer.writerow(['Design Capacity (mAh)', f"{drain['design_capacity_mah']:.2f}"])
+            writer.writerow(['Current Voltage (V)', f"{drain['current_voltage_v']:.3f}"])
+            if 'temperature_c' in drain:
+                writer.writerow(['Temperature (°C)', f"{drain['temperature_c']:.1f}"])
+            if 'battery_level_percent' in drain:
+                writer.writerow(['Battery Level (%)', drain['battery_level_percent']])
+            writer.writerow(['Health Multiplier', f"{drain['health_multiplier']:.2f}"])
+            writer.writerow(['Effective Capacity (mAh)', f"{drain['effective_capacity_mah']:.2f}"])
+            writer.writerow(['Total Battery Energy (Wh)', f"{drain['total_battery_energy_wh']:.3f}"])
+            writer.writerow(['Consumed Energy (J)', f"{drain['consumed_energy_joules']:.2f}"])
+            writer.writerow(['Consumed Energy (Wh)', f"{drain['consumed_energy_wh']:.6f}"])
+            writer.writerow(['Battery Drain (%)', f"{drain['battery_drain_percentage']:.6f}"])
+
     log(f"Detailed results exported to: {filepath}", log_sev=LogSeverity.INFO)
 
 
-def display_new_profiler_results(emanafa, profile_mode):
+def display_new_profiler_results(emanafa, profile_mode, battery_drain_info=None):
     """Display results from new enhanced profiler."""
     print("\n" + "="*70)
     print("PROFILING RESULTS")
     print("="*70)
-    
+
+    total_energy = 0
     if profile_mode in ['energy', 'both']:
         if hasattr(emanafa, 'power_rails_energy') and emanafa.power_rails_energy:
-            total = emanafa.power_rails_energy['total']
-            print(f"\n⚡ ENERGY CONSUMPTION:")
-            print(f"  Total: {total:.2f} Joules ({total/3600:.4f} Wh)")
-            
-            # Show top 5 rails
+            total_energy = emanafa.power_rails_energy['total']
+            print(f"\n ENERGY CONSUMPTION:")
+            print(f"  Total: {total_energy:.2f} Joules ({total_energy/3600:.4f} Wh)")
+
+            #show top 5 rails
             rails = emanafa.power_rails_energy.get('by_rail', {})
             if rails:
                 sorted_rails = sorted(rails.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -87,53 +107,58 @@ def display_new_profiler_results(emanafa, profile_mode):
                 for rail, energy in sorted_rails:
                     print(f"    {rail}: {energy:.2f} J")
         else:
-            print("\n⚠️  No energy data available")
-    
+            print("\n No energy data available")
+
     if profile_mode in ['memory', 'both']:
         if hasattr(emanafa, 'memory_stats') and emanafa.memory_stats:
             mem = emanafa.memory_stats
-            print(f"\n💾 SYSTEM MEMORY STATISTICS:")
-            
-            # Show Total RAM
+            print(f"\nSYSTEM MEMORY STATISTICS:")
+
+            #show Total RAM
             if 'MemTotal' in mem:
                 total_ram = mem['MemTotal']['avg_mb']
                 print(f"  Total RAM: {total_ram:.2f} MB ({total_ram/1024:.2f} GB)")
-            
-            # Calculate and show Memory Used (Total - Available)
+
+            #calculate and show Memory Used (Total - Available)
             if 'MemTotal' in mem and 'MemAvailable' in mem:
                 total = mem['MemTotal']['avg_mb']
                 avail = mem['MemAvailable']
-                
-                used_min = total - avail['max_mb']  # When available is max, used is min
+
+                used_min = total - avail['max_mb']  #when available is max, used is min
                 used_avg = total - avail['avg_mb']
-                used_max = total - avail['min_mb']  # When available is min, used is max
-                
+                used_max = total - avail['min_mb']  #when available is min, used is max
+
                 print(f"\n  Memory Used:")
                 print(f"    Min: {used_min:.2f} MB  |  Avg: {used_avg:.2f} MB  |  Max: {used_max:.2f} MB")
-            
+
             print(f"\n  (Detailed breakdown of all counters saved to JSON file)")
         else:
-            print("\n⚠️  No memory data available")
-    
+            print("\n  No memory data available")
+
     print("="*70)
+
+    #print battery drain information if available and we have energy data
+    if battery_drain_info and total_energy > 0:
+        calculator = BatteryDrainCalculator()
+        print(calculator.format_battery_drain_report(battery_drain_info))
 
 
 def create_manafa(args):
-    # Check if we should use EManafa instead of AMEManafa
-    # Use EManafa when: force_legacy is set, OR using new profiling modes (energy/memory/both)
+    #check if we should use EManafa instead of AMEManafa
+    #use EManafa when: force_legacy is set, OR using new profiling modes (energy/memory/both)
     should_use_emanafa = (
         getattr(args, 'force_legacy', False) or
         (hasattr(args, 'profile_mode') and args.profile_mode and args.profile_mode != 'legacy')
     )
 
-    # Hunter mode takes priority
+    #hunter mode takes priority
     if args.hunter or args.hunterfile is not None:
         return HunterEManafa(power_profile=args.profile, timezone=args.timezone, resources_dir=MANAFA_RESOURCES_DIR)
 
-    # If app package is specified
+    #if app package is specified
     elif args.app_package is not None:
         if should_use_emanafa:
-            # Use EManafa for legacy mode or new energy/memory modes
+            #use EManafa for legacy mode or new energy/memory modes
             if getattr(args, 'force_legacy', False):
                 log("Using EManafa with legacy profiler (app package specified)", log_sev=LogSeverity.INFO)
             else:
@@ -142,7 +167,7 @@ def create_manafa(args):
             manafa = EManafa(power_profile=args.profile, timezone=args.timezone, resources_dir=MANAFA_RESOURCES_DIR)
             manafa.app = args.app_package
 
-            # Set profiler mode
+            #set profiler mode
             if getattr(args, 'force_legacy', False):
                 manafa.profiler_mode = 'legacy'
             elif hasattr(args, 'profile_mode') and args.profile_mode:
@@ -150,17 +175,17 @@ def create_manafa(args):
 
             return manafa
         else:
-            # Use AMEManafa for app-specific profiling (default behavior)
+            #use AMEManafa for app-specific profiling (default behavior)
             manafa = AMEManafa(app_package_name=args.app_package, power_profile=args.profile, timezone=args.timezone,
                                resources_dir=MANAFA_RESOURCES_DIR)
             if hasattr(args, 'profile_mode') and args.profile_mode:
                 manafa.profiler_mode = args.profile_mode
             return manafa
 
-    # System-wide profiling (no app package)
+    #system-wide profiling (no app package)
     else:
         manafa = EManafa(power_profile=args.profile, timezone=args.timezone, resources_dir=MANAFA_RESOURCES_DIR)
-        # Set profiler mode
+        #set profiler mode
         if getattr(args, 'force_legacy', False):
             manafa.profiler_mode = 'legacy'
         elif hasattr(args, 'profile_mode') and args.profile_mode:
@@ -201,13 +226,18 @@ def parse_results(args, manafa):
     manafa.clean()
 
 
-def print_profiled_stats(el_time, total_consumption, per_comp_consumption, event_timeline):
+def print_profiled_stats(el_time, total_consumption, per_comp_consumption, event_timeline, battery_drain_info=None):
     print("--------------------------------------")
     print(f"Total energy consumed: {total_consumption} Joules")
     print(f"Elapsed time: {el_time} secs")
     print("--------------------------------------")
     print("Per-component consumption")
     print(json.dumps(per_comp_consumption, indent=1))
+
+    #print battery drain information if available
+    if battery_drain_info:
+        calculator = BatteryDrainCalculator()
+        print(calculator.format_battery_drain_report(battery_drain_info))
 
 
 def main():
@@ -243,7 +273,7 @@ Examples:
     parser.add_argument("-a", "--app_package", help="package of app to profile", default=None, type=str)
     parser.add_argument("-cmd", "--command", help="command to profile", default=None, type=str)
 
-    # New enhanced profiling arguments
+    #new enhanced profiling arguments
     parser.add_argument("-pm", "--profile-mode",
                        choices=['legacy', 'energy', 'memory', 'both'],
                        default='energy',
@@ -258,7 +288,7 @@ Examples:
                        help='Force use of legacy profiler even if device supports new features')
     args = parser.parse_args()
     
-    # Warnings for new modes
+    #warnings for new modes
     if args.profile_mode == 'both' and not args.force_legacy:
         log("WARNING: Profiling both energy and memory simultaneously may introduce overhead.", 
             log_sev=LogSeverity.WARNING)
@@ -279,7 +309,7 @@ Examples:
     manafa = create_manafa(args)
     
     if has_device_conn and invalid_file_args:
-        # Live profiling mode
+        #live profiling mode
         print(f"\n{'='*70}")
         print(f"E-MANAFA Profiling")
         print(f"{'='*70}")
@@ -305,16 +335,23 @@ Examples:
             log("stopping profiler...")
         
         manafa.stop()
-        
-        # Display results based on profiler type
+
+        #create battery drain calculator
+        battery_calculator = BatteryDrainCalculator()
+
+        #display results based on profiler type
         if args.profile_mode == 'legacy' or args.force_legacy:
-            # Legacy output
+            #legacy output
             if len(manafa.perf_events.events) > 1 or len(manafa.bat_events.events) > 0:
                 begin = manafa.perf_events.events[0].time if len(manafa.perf_events.events) > 1 else manafa.bat_events.events[0].time
                 end = manafa.perf_events.events[-1].time if len(manafa.perf_events.events) > 1 else manafa.bat_events.events[-1].time
                 try:
                     total, per_c, timeline = manafa.get_consumption_in_between(begin, end)
-                    print_profiled_stats(end-begin, total, per_c, timeline)
+
+                    # Calculate battery drain
+                    battery_drain_info = battery_calculator.calculate_battery_drain(total)
+
+                    print_profiled_stats(end-begin, total, per_c, timeline, battery_drain_info)
                     out_file = manafa.save_final_report(begin, output_filepath=args.output_file)
                     log(f"Output file: {out_file}. You can inspect it with E-MANAFA Inspector in {MANAFA_INSPECTOR_URL}",
                         log_sev=LogSeverity.SUCCESS)
@@ -325,38 +362,49 @@ Examples:
                 log("No profiling events captured. Legacy profiler requires perfetto events.", log_sev=LogSeverity.WARNING)
                 log("The trace files were saved but could not be parsed.", log_sev=LogSeverity.INFO)
         else:
-            # New enhanced profiler output
-            display_new_profiler_results(manafa, args.profile_mode)
-            
-            # Export detailed results
+            #new enhanced profiler output
+            #calculate battery drain if we have energy data
+            battery_drain_info = None
+            if args.profile_mode in ['energy', 'both'] and hasattr(manafa, 'power_rails_energy') and manafa.power_rails_energy:
+                total_energy = manafa.power_rails_energy.get('total', 0)
+                if total_energy > 0:
+                    battery_drain_info = battery_calculator.calculate_battery_drain(total_energy)
+
+            display_new_profiler_results(manafa, args.profile_mode, battery_drain_info)
+
+            #export detailed results
             results = {
                 'mode': args.profile_mode,
                 'app': args.app_package,
                 'duration_seconds': args.time_in_secs,
                 'timestamp': time.time()
             }
-            
+
             if args.profile_mode in ['energy', 'both'] and hasattr(manafa, 'power_rails_energy'):
                 results['energy'] = manafa.power_rails_energy
-            
+
             if args.profile_mode in ['memory', 'both'] and hasattr(manafa, 'memory_stats'):
                 results['memory'] = manafa.memory_stats
-            
-            # Auto-generate filename if not specified
+
+            #add battery drain info to results
+            if battery_drain_info:
+                results['battery_drain'] = battery_drain_info
+
+            #auto-generate filename if not specified
             if not args.output_file and ('energy' in results or 'memory' in results):
                 timestamp = int(time.time())
                 args.output_file = f"emanafa_{args.profile_mode}_{timestamp}.{args.output_format}"
-            
-            # Export
+
+            #export
             if args.output_file and ('energy' in results or 'memory' in results):
                 if args.output_format == 'json':
                     export_to_json(results, args.output_file)
                 else:
                     export_to_csv(results, args.output_file)
-                
-                print(f"\n✅ Detailed results saved to: {args.output_file}\n")
+
+                print(f"\nDetailed results saved to: {args.output_file}\n")
     else:
-        # File parsing mode (existing functionality)
+        #file parsing mode (existing functionality)
         parse_results(args, manafa)
 
 

@@ -32,12 +32,12 @@ def create_perfetto_service(boot_time=0, output_res_folder="perfetto",
     if not device_has_perfetto():
         raise Exception("Perfetto is not available on this device")
     
-    # Validate: cannot enable both energy and memory simultaneously
-    # if enable_energy and enable_memory:
-    #     raise ValueError("Cannot enable both energy and memory profiling simultaneously. "
-    #                     "Run them separately to avoid overhead skewing results.")
+    #validate: cannot enable both energy and memory simultaneously
+    #if enable_energy and enable_memory:
+    #raise ValueError("Cannot enable both energy and memory profiling simultaneously. "
+    #"Run them separately to avoid overhead skewing results.")
     
-    # Handle forced modes
+    #handle forced modes
     if force_legacy:
         log("Forcing legacy PerfettoService", log_sev=LogSeverity.INFO)
         return PerfettoService(boot_time=boot_time, output_res_folder=output_res_folder)
@@ -52,8 +52,8 @@ def create_perfetto_service(boot_time=0, output_res_folder="perfetto",
             enable_memory=enable_memory
         )
     
-    # Auto-detect device capabilities
-    # If BOTH energy and memory are requested
+    #auto-detect device capabilities
+    #if BOTH energy and memory are requested
     if enable_energy and enable_memory and device_supports_power_rails():
         log("Using PerfettoServiceEnhanced for combined energy and memory profiling", 
             log_sev=LogSeverity.INFO)
@@ -63,7 +63,7 @@ def create_perfetto_service(boot_time=0, output_res_folder="perfetto",
             enable_energy=True,
             enable_memory=True
         )
-    # If energy is requested, check for power rails support
+    #if energy is requested, check for power rails support
     elif enable_energy and device_supports_power_rails():
         log("Using PerfettoServiceEnhanced for energy profiling (power rails supported)", 
             log_sev=LogSeverity.INFO)
@@ -73,7 +73,7 @@ def create_perfetto_service(boot_time=0, output_res_folder="perfetto",
             enable_energy=True,
             enable_memory=False
         )
-    # If memory is requested, use enhanced service
+    #if memory is requested, use enhanced service
     elif enable_memory:
         log("Using PerfettoServiceEnhanced for memory profiling", log_sev=LogSeverity.INFO)
         return PerfettoServiceEnhanced(
@@ -82,7 +82,7 @@ def create_perfetto_service(boot_time=0, output_res_folder="perfetto",
             enable_energy=False,
             enable_memory=True
         )
-    # Default: legacy service if power rails not supported
+    #default: legacy service if power rails not supported
     else:
         log("Using legacy PerfettoService (power rails not supported)", log_sev=LogSeverity.INFO)
         return PerfettoService(boot_time=boot_time, output_res_folder=output_res_folder)

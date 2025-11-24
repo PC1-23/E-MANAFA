@@ -84,7 +84,7 @@ class PerfettoServiceEnhanced(PerfettoService):
         """
         super().__init__(boot_time, output_res_folder)
         
-        # Select appropriate config file based on mode
+        #select appropriate config file based on mode
         if enable_energy and enable_memory:
             self.cfg_file = "perfetto_config_both.pbtxt"
         elif enable_energy:
@@ -132,19 +132,19 @@ class PerfettoServiceEnhanced(PerfettoService):
         if file_id is None:
             file_id = execute_shell_command("adb shell date +%s")[1].strip()
         
-        # Try to kill perfetto
+        #try to kill perfetto
         res, o, e = execute_shell_command("adb shell killall perfetto")
         
-        # Check if perfetto is still running
+        #check if perfetto is still running
         is_running_res, is_running_out, _ = execute_shell_command("adb shell ps | grep perfetto")
         
-        # Only raise exception if killall failed AND perfetto is still running
+        #only raise exception if killall failed AND perfetto is still running
         if res != 0 and is_running_res == 0 and 'perfetto' in is_running_out:
             raise Exception("unable to kill Perfetto service")
         
         time.sleep(1)
         
-        # Save as .perfetto-trace to preserve binary format with counter data
+        #save as .perfetto-trace to preserve binary format with counter data
         filename = os.path.join(self.results_dir, f'trace-{file_id}-{self.boot_time}.perfetto-trace')
         res, o, e = execute_shell_command(f"adb pull {self.output_filename} {filename}")
         
